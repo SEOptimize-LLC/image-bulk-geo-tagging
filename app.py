@@ -390,35 +390,52 @@ def main():
                             st.subheader("❌ Failed Images")
                             st.warning(f"{len(failed_files)} image(s) could not be processed")
 
-                            # Create ZIP of failed images
-                            failed_zip_buffer = io.BytesIO()
-                            with zipfile.ZipFile(failed_zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                                # Add failed images
+                            try:
+                                # Create ZIP of failed images IN MEMORY before cleanup
+                                failed_zip_buffer = io.BytesIO()
+                                files_with_data = []
+
+                                # Load all failed image data into memory BEFORE creating ZIP
                                 for failed in failed_files:
-                                    if failed.get('path'):
-                                        zip_file.write(failed['path'], failed['name'])
+                                    if failed.get('path') and os.path.exists(failed['path']):
+                                        with open(failed['path'], 'rb') as f:
+                                            files_with_data.append({
+                                                'name': failed['name'],
+                                                'data': f.read(),
+                                                'error': failed['error']
+                                            })
 
-                                # Add error log
-                                error_log = "\n".join([f"{f['name']}: {f['error']}" for f in failed_files])
-                                zip_file.writestr("_ERROR_LOG.txt", error_log)
+                                # Create ZIP from in-memory data
+                                with zipfile.ZipFile(failed_zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                    for file_data in files_with_data:
+                                        zip_file.writestr(file_data['name'], file_data['data'])
 
-                            failed_zip_buffer.seek(0)
+                                    # Add error log
+                                    error_log = "\n".join([f"{f['name']}: {f['error']}" for f in files_with_data])
+                                    zip_file.writestr("_ERROR_LOG.txt", error_log)
 
-                            col1, col2 = st.columns([2, 1])
-                            with col1:
-                                st.download_button(
-                                    label=f"⬇️ Download Failed Images (ZIP)",
-                                    data=failed_zip_buffer.getvalue(),
-                                    file_name=f"failed_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                                    mime="application/zip",
-                                    use_container_width=True,
-                                    help="Download the original files that failed processing, plus error log"
-                                )
-                            with col2:
-                                failed_zip_size_mb = len(failed_zip_buffer.getvalue()) / (1024 * 1024)
-                                st.metric("ZIP Size", f"{failed_zip_size_mb:.2f} MB")
+                                # Get ZIP data into variable BEFORE cleanup
+                                failed_zip_data = failed_zip_buffer.getvalue()
+                                failed_zip_size_mb = len(failed_zip_data) / (1024 * 1024)
 
-                            st.info("💡 These are the original uploaded files that couldn't be processed. Use a different tool to add geo-tags to these images.")
+                                col1, col2 = st.columns([2, 1])
+                                with col1:
+                                    st.download_button(
+                                        label=f"⬇️ Download Failed Images (ZIP)",
+                                        data=failed_zip_data,
+                                        file_name=f"failed_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                        mime="application/zip",
+                                        use_container_width=True,
+                                        help="Download the original files that failed processing, plus error log"
+                                    )
+                                with col2:
+                                    st.metric("ZIP Size", f"{failed_zip_size_mb:.2f} MB")
+
+                                st.info("💡 These are the original uploaded files that couldn't be processed. Use a different tool to add geo-tags to these images.")
+
+                            except Exception as e:
+                                st.error(f"❌ Error creating failed images ZIP: {str(e)}")
+                                st.info("Failed images list is still available below.")
 
                         # Add file lists download section
                         st.markdown("---")
