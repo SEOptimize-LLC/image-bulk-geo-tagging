@@ -311,10 +311,15 @@ def main():
                     # Show failed files if any
                     if failed_files:
                         st.warning(f"⚠️ {len(failed_files)} image(s) failed to process")
-                        with st.expander("View Failed Images", expanded=True):
-                            st.markdown("**Failed images and error details:**")
-                            for failed in failed_files:
-                                st.markdown(f"- **{failed['name']}**: {failed['error']}")
+                        with st.expander("View Failed Images Details", expanded=False):
+                            # Use text area for better performance with many failures
+                            failed_text = "\n".join([f"{i+1}. {f['name']}: {f['error']}" for i, f in enumerate(failed_files)])
+                            st.text_area(
+                                "Failed images and error details:",
+                                value=failed_text,
+                                height=300,
+                                disabled=True
+                            )
 
                     if processed_files:
                         st.success(f"✓ Successfully processed {success_count} out of {len(uploaded_files)} image(s)")
