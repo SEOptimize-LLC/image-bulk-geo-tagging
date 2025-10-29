@@ -358,7 +358,7 @@ def main():
                             st.download_button(
                                 label="⬇️ Download Image",
                                 data=file_data,
-                                file_name=f"geotagged_{processed_files[0]['name']}",
+                                file_name=processed_files[0]['name'],
                                 mime="image/jpeg",
                                 use_container_width=True
                             )
@@ -367,8 +367,8 @@ def main():
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                                 for img_info in processed_files:
-                                    # Add file to ZIP directly from disk
-                                    zip_file.write(img_info["path"], f"geotagged_{img_info['name']}")
+                                    # Add file to ZIP with original filename
+                                    zip_file.write(img_info["path"], img_info['name'])
 
                             zip_buffer.seek(0)
 
