@@ -4,7 +4,7 @@ A powerful and user-friendly Streamlit application that allows you to add geo-ta
 
 ## Features
 
-- **Bulk Processing**: Upload and process multiple images simultaneously
+- **True Bulk Processing**: Upload and process hundreds or thousands of images
 - **Complete Metadata Support**:
   - Title
   - Description
@@ -12,12 +12,14 @@ A powerful and user-friendly Streamlit application that allows you to add geo-ta
   - Physical Address
   - GPS Coordinates (Latitude & Longitude)
 - **EXIF Data Integration**: All metadata is embedded directly into the image EXIF data
+- **Memory-Optimized**: Uses temporary files and garbage collection for efficient processing
 - **User-Friendly Interface**: Clean, intuitive Streamlit interface
 - **Flexible Download Options**:
   - Single image download for one file
   - ZIP archive for multiple images
 - **Format Support**: Works with JPG, JPEG, and PNG image formats
 - **Cloud Ready**: Optimized for deployment on Streamlit Cloud
+- **Large Upload Support**: Up to 2GB total upload size
 
 ## Live Demo
 
@@ -102,6 +104,47 @@ streamlit run app.py
 
 Your app will be live in a few minutes!
 
+## Bulk Processing Capabilities
+
+### Upload Limits
+
+- **Maximum upload size**: 2000 MB (2 GB) total
+- **File limit**: No hard limit on number of files
+- **Recommended batch size**: 100-500 images per session for optimal performance
+- **Individual file size**: No specific limit (constrained by total upload size)
+
+### Performance Optimization
+
+The application is specifically optimized for bulk operations:
+
+1. **Memory-Efficient Processing**:
+   - Processes images one at a time
+   - Immediately writes processed images to temporary files
+   - Clears memory after each image using garbage collection
+   - Prevents memory overflow even with thousands of images
+
+2. **Streaming ZIP Creation**:
+   - Reads processed images from disk (not memory)
+   - Creates ZIP archives efficiently
+   - Displays final file size
+
+3. **Error Handling**:
+   - Continues processing if individual images fail
+   - Reports success/failure count
+   - Shows detailed error messages for failed images
+
+### Real-World Capacity
+
+Based on typical image sizes:
+
+| Image Size | Approximate Images per 2GB |
+|------------|---------------------------|
+| 1 MB (compressed) | ~2000 images |
+| 5 MB (high-quality) | ~400 images |
+| 10 MB (RAW/large) | ~200 images |
+
+**Note**: While you can upload up to 2GB at once, processing 100-500 images per batch is recommended for the best user experience on Streamlit Cloud.
+
 ## Technical Details
 
 ### EXIF Data Mapping
@@ -175,9 +218,20 @@ Longitude: -116.185470
    - JPG/JPEG files maintain their format
    - PNG files are converted to JPEG (EXIF support requirement)
 
-4. **Batch Processing**: Process similar images together with the same metadata
+4. **Batch Processing**:
+   - Process similar images together with the same metadata
+   - For very large batches (1000+), consider splitting into multiple sessions
+   - 100-500 images per batch is optimal
 
-5. **File Size**: The app supports up to 200MB total upload size on Streamlit Cloud
+5. **Upload Size**:
+   - The app supports up to 2GB total upload size
+   - Monitor the displayed upload size after selecting files
+   - App shows progress during processing
+
+6. **Memory Management**:
+   - Processing is optimized to handle large batches
+   - Each image is processed individually and saved to disk
+   - Failed images won't stop the entire batch
 
 ## Troubleshooting
 

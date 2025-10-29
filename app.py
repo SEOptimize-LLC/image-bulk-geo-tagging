@@ -6,6 +6,7 @@ import zipfile
 from datetime import datetime
 import tempfile
 import os
+import gc
 
 
 def convert_to_degrees(value):
@@ -123,6 +124,24 @@ def main():
     st.title("📍 Bulk Image Geo-Tagging Tool")
     st.markdown("Add geo-tags and metadata to multiple images at once")
 
+    # Show capabilities
+    with st.expander("ℹ️ Upload Limits & Recommendations", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+            **Upload Limits:**
+            - Max total upload: 2000 MB (2 GB)
+            - Supported formats: JPG, JPEG, PNG
+            - No limit on number of files
+            """)
+        with col2:
+            st.markdown("""
+            **Recommendations:**
+            - Process 100-500 images per batch for optimal performance
+            - Typical 5MB photo = ~400 images per batch
+            - Memory-optimized for bulk operations
+            """)
+
     # Sidebar for metadata input
     st.sidebar.header("Metadata Settings")
     st.sidebar.markdown("Enter the metadata to be added to all uploaded images:")
@@ -154,7 +173,11 @@ def main():
     )
 
     if uploaded_files:
-        st.success(f"✓ {len(uploaded_files)} image(s) uploaded")
+        # Calculate total size
+        total_size = sum([file.size for file in uploaded_files])
+        total_size_mb = total_size / (1024 * 1024)
+
+        st.success(f"✓ {len(uploaded_files)} image(s) uploaded ({total_size_mb:.2f} MB total)")
 
         # Show preview of metadata
         with st.expander("Preview Metadata", expanded=True):
@@ -198,65 +221,100 @@ def main():
                     "longitude": longitude if (latitude != 0.0 or longitude != 0.0) else None
                 }
 
-                # Process images
+                # Process images with memory-efficient approach
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
-                processed_images = []
+                # Create temporary directory for processed images
+                temp_dir = tempfile.mkdtemp()
+                processed_files = []
+                success_count = 0
 
-                for idx, uploaded_file in enumerate(uploaded_files):
-                    status_text.text(f"Processing {uploaded_file.name}...")
+                try:
+                    for idx, uploaded_file in enumerate(uploaded_files):
+                        status_text.text(f"Processing {idx + 1}/{len(uploaded_files)}: {uploaded_file.name}...")
 
-                    # Read image bytes
-                    image_bytes = uploaded_file.read()
+                        try:
+                            # Read image bytes
+                            image_bytes = uploaded_file.read()
 
-                    # Process image
-                    processed_bytes = add_geotag_to_image(image_bytes, metadata)
+                            # Process image
+                            processed_bytes = add_geotag_to_image(image_bytes, metadata)
 
-                    if processed_bytes:
-                        processed_images.append({
-                            "name": uploaded_file.name,
-                            "bytes": processed_bytes
-                        })
+                            if processed_bytes:
+                                # Save to temporary file immediately to free memory
+                                temp_file_path = os.path.join(temp_dir, f"geotagged_{uploaded_file.name}")
+                                with open(temp_file_path, "wb") as f:
+                                    f.write(processed_bytes)
 
-                    # Update progress
-                    progress_bar.progress((idx + 1) / len(uploaded_files))
+                                processed_files.append({
+                                    "name": uploaded_file.name,
+                                    "path": temp_file_path
+                                })
+                                success_count += 1
 
-                status_text.text("Processing complete!")
+                            # Clear memory
+                            del image_bytes
+                            del processed_bytes
+                            gc.collect()
 
-                if processed_images:
-                    st.success(f"✓ Successfully processed {len(processed_images)} image(s)")
+                        except Exception as e:
+                            st.warning(f"⚠️ Failed to process {uploaded_file.name}: {str(e)}")
 
-                    # Create download section
-                    st.header("Download Processed Images")
+                        # Update progress
+                        progress_bar.progress((idx + 1) / len(uploaded_files))
 
-                    if len(processed_images) == 1:
-                        # Single file download
-                        st.download_button(
-                            label="⬇️ Download Image",
-                            data=processed_images[0]["bytes"],
-                            file_name=f"geotagged_{processed_images[0]['name']}",
-                            mime="image/jpeg",
-                            use_container_width=True
-                        )
+                    status_text.text("Processing complete!")
+
+                    if processed_files:
+                        st.success(f"✓ Successfully processed {success_count} out of {len(uploaded_files)} image(s)")
+
+                        # Create download section
+                        st.header("Download Processed Images")
+
+                        if len(processed_files) == 1:
+                            # Single file download - read from temp file
+                            with open(processed_files[0]["path"], "rb") as f:
+                                file_data = f.read()
+
+                            st.download_button(
+                                label="⬇️ Download Image",
+                                data=file_data,
+                                file_name=f"geotagged_{processed_files[0]['name']}",
+                                mime="image/jpeg",
+                                use_container_width=True
+                            )
+                        else:
+                            # Multiple files - create ZIP from temp files
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                for img_info in processed_files:
+                                    # Add file to ZIP directly from disk
+                                    zip_file.write(img_info["path"], f"geotagged_{img_info['name']}")
+
+                            zip_buffer.seek(0)
+
+                            st.download_button(
+                                label=f"⬇️ Download All Images (ZIP)",
+                                data=zip_buffer.getvalue(),
+                                file_name=f"geotagged_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+
+                            # Show size info
+                            zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
+                            st.info(f"📦 ZIP file size: {zip_size_mb:.2f} MB")
                     else:
-                        # Multiple files - create ZIP
-                        zip_buffer = io.BytesIO()
-                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                            for img in processed_images:
-                                zip_file.writestr(f"geotagged_{img['name']}", img["bytes"])
+                        st.error("❌ Failed to process images. Please try again.")
 
-                        zip_buffer.seek(0)
-
-                        st.download_button(
-                            label=f"⬇️ Download All Images (ZIP)",
-                            data=zip_buffer.getvalue(),
-                            file_name=f"geotagged_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                            mime="application/zip",
-                            use_container_width=True
-                        )
-                else:
-                    st.error("❌ Failed to process images. Please try again.")
+                finally:
+                    # Cleanup temporary files
+                    import shutil
+                    try:
+                        shutil.rmtree(temp_dir)
+                    except:
+                        pass
 
     else:
         st.info("👆 Upload images using the file uploader above to get started")
