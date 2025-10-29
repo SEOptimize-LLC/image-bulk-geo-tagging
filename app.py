@@ -21,20 +21,23 @@ def convert_to_degrees(value):
     return ((degrees, 1), (minutes, 1), (seconds, 100))
 
 
-def add_geotag_to_image(image_bytes, metadata):
+def add_geotag_to_image(image_bytes, metadata, original_format="JPEG", jpeg_quality=95):
     """
     Add geo-tagging and metadata to an image's EXIF data.
 
     Args:
         image_bytes: Image file bytes
         metadata: Dictionary containing title, description, keywords, address, latitude, longitude
+        original_format: Original image format (JPEG, PNG, etc.)
+        jpeg_quality: JPEG quality (1-100) when converting to JPEG
 
     Returns:
-        Modified image bytes
+        Tuple of (modified image bytes, error message) or (None, error message) on failure
     """
     try:
         # Open image
         img = Image.open(io.BytesIO(image_bytes))
+        original_mode = img.mode
 
         # Load existing EXIF data or create new
         try:
@@ -104,14 +107,13 @@ def add_geotag_to_image(image_bytes, metadata):
         elif img.mode != "RGB":
             img = img.convert("RGB")
 
-        # Save with EXIF data
-        img.save(output, format="JPEG", exif=exif_bytes, quality=95)
+        # Save with EXIF data (always JPEG for EXIF support)
+        img.save(output, format="JPEG", exif=exif_bytes, quality=jpeg_quality)
 
-        return output.getvalue()
+        return output.getvalue(), None
 
     except Exception as e:
-        st.error(f"Error processing image: {str(e)}")
-        return None
+        return None, str(e)
 
 
 def main():
@@ -162,6 +164,17 @@ def main():
         longitude = st.number_input("Longitude", min_value=-180.0, max_value=180.0, value=0.0, format="%.6f", step=0.000001)
 
     st.sidebar.markdown("*Example: San Francisco (37.7749, -122.4194)*")
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Output Settings")
+    jpeg_quality = st.sidebar.slider(
+        "JPEG Quality",
+        min_value=1,
+        max_value=100,
+        value=95,
+        help="Higher quality = larger file size. Images are converted to JPEG to support EXIF metadata."
+    )
+    st.sidebar.info("Note: All images are converted to JPEG format to ensure EXIF metadata compatibility.")
 
     # Main content area
     st.header("Upload Images")
@@ -228,6 +241,7 @@ def main():
                 # Create temporary directory for processed images
                 temp_dir = tempfile.mkdtemp()
                 processed_files = []
+                failed_files = []
                 success_count = 0
 
                 try:
@@ -238,10 +252,18 @@ def main():
                             # Read image bytes
                             image_bytes = uploaded_file.read()
 
-                            # Process image
-                            processed_bytes = add_geotag_to_image(image_bytes, metadata)
+                            # Get original format
+                            original_format = uploaded_file.name.split('.')[-1].upper()
 
-                            if processed_bytes:
+                            # Process image
+                            processed_bytes, error = add_geotag_to_image(
+                                image_bytes,
+                                metadata,
+                                original_format=original_format,
+                                jpeg_quality=jpeg_quality
+                            )
+
+                            if processed_bytes and error is None:
                                 # Save to temporary file immediately to free memory
                                 temp_file_path = os.path.join(temp_dir, f"geotagged_{uploaded_file.name}")
                                 with open(temp_file_path, "wb") as f:
@@ -252,19 +274,47 @@ def main():
                                     "path": temp_file_path
                                 })
                                 success_count += 1
+                            else:
+                                # Track failed images
+                                failed_files.append({
+                                    "name": uploaded_file.name,
+                                    "error": error or "Unknown error"
+                                })
 
                             # Clear memory
                             del image_bytes
-                            del processed_bytes
+                            if processed_bytes:
+                                del processed_bytes
                             gc.collect()
 
                         except Exception as e:
-                            st.warning(f"⚠️ Failed to process {uploaded_file.name}: {str(e)}")
+                            failed_files.append({
+                                "name": uploaded_file.name,
+                                "error": str(e)
+                            })
 
                         # Update progress
                         progress_bar.progress((idx + 1) / len(uploaded_files))
 
                     status_text.text("Processing complete!")
+
+                    # Show summary with clear breakdown
+                    st.markdown("### Processing Summary")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Uploaded", len(uploaded_files))
+                    with col2:
+                        st.metric("Successfully Processed", success_count, delta=None if success_count == len(uploaded_files) else f"{success_count - len(uploaded_files)}")
+                    with col3:
+                        st.metric("Failed", len(failed_files), delta=None if len(failed_files) == 0 else f"-{len(failed_files)}")
+
+                    # Show failed files if any
+                    if failed_files:
+                        st.warning(f"⚠️ {len(failed_files)} image(s) failed to process")
+                        with st.expander("View Failed Images", expanded=True):
+                            st.markdown("**Failed images and error details:**")
+                            for failed in failed_files:
+                                st.markdown(f"- **{failed['name']}**: {failed['error']}")
 
                     if processed_files:
                         st.success(f"✓ Successfully processed {success_count} out of {len(uploaded_files)} image(s)")
