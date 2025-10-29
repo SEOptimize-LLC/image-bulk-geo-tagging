@@ -192,6 +192,9 @@ def main():
 
         st.success(f"✓ {len(uploaded_files)} image(s) uploaded ({total_size_mb:.2f} MB total)")
 
+        # Warning if upload seems incomplete
+        st.info(f"💡 **Tip:** If you selected more files than shown above, some may have been dropped due to browser/upload limits. After processing, you can download a list of successfully processed files to compare against your original set.")
+
         # Show preview of metadata
         with st.expander("Preview Metadata", expanded=True):
             col1, col2 = st.columns(2)
@@ -248,6 +251,7 @@ def main():
                     for idx, uploaded_file in enumerate(uploaded_files):
                         status_text.text(f"Processing {idx + 1}/{len(uploaded_files)}: {uploaded_file.name}...")
 
+                        image_bytes = None
                         try:
                             # Read image bytes
                             image_bytes = uploaded_file.read()
@@ -275,23 +279,42 @@ def main():
                                 })
                                 success_count += 1
                             else:
-                                # Track failed images
+                                # Track failed images and save original file
+                                failed_file_path = os.path.join(temp_dir, f"failed_{uploaded_file.name}")
+                                with open(failed_file_path, "wb") as f:
+                                    f.write(image_bytes)
+
                                 failed_files.append({
                                     "name": uploaded_file.name,
-                                    "error": error or "Unknown error"
+                                    "error": error or "Unknown error",
+                                    "path": failed_file_path
                                 })
 
                             # Clear memory
-                            del image_bytes
                             if processed_bytes:
                                 del processed_bytes
+                            if image_bytes:
+                                del image_bytes
                             gc.collect()
 
                         except Exception as e:
-                            failed_files.append({
-                                "name": uploaded_file.name,
-                                "error": str(e)
-                            })
+                            # Save original file even if exception occurred
+                            if image_bytes:
+                                failed_file_path = os.path.join(temp_dir, f"failed_{uploaded_file.name}")
+                                with open(failed_file_path, "wb") as f:
+                                    f.write(image_bytes)
+
+                                failed_files.append({
+                                    "name": uploaded_file.name,
+                                    "error": str(e),
+                                    "path": failed_file_path
+                                })
+                            else:
+                                failed_files.append({
+                                    "name": uploaded_file.name,
+                                    "error": str(e),
+                                    "path": None
+                                })
 
                         # Update progress
                         progress_bar.progress((idx + 1) / len(uploaded_files))
@@ -360,6 +383,77 @@ def main():
                             # Show size info
                             zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
                             st.info(f"📦 ZIP file size: {zip_size_mb:.2f} MB")
+
+                        # Add failed images download section (if any)
+                        if failed_files:
+                            st.markdown("---")
+                            st.subheader("❌ Failed Images")
+                            st.warning(f"{len(failed_files)} image(s) could not be processed")
+
+                            # Create ZIP of failed images
+                            failed_zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(failed_zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                # Add failed images
+                                for failed in failed_files:
+                                    if failed.get('path'):
+                                        zip_file.write(failed['path'], failed['name'])
+
+                                # Add error log
+                                error_log = "\n".join([f"{f['name']}: {f['error']}" for f in failed_files])
+                                zip_file.writestr("_ERROR_LOG.txt", error_log)
+
+                            failed_zip_buffer.seek(0)
+
+                            col1, col2 = st.columns([2, 1])
+                            with col1:
+                                st.download_button(
+                                    label=f"⬇️ Download Failed Images (ZIP)",
+                                    data=failed_zip_buffer.getvalue(),
+                                    file_name=f"failed_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                    mime="application/zip",
+                                    use_container_width=True,
+                                    help="Download the original files that failed processing, plus error log"
+                                )
+                            with col2:
+                                failed_zip_size_mb = len(failed_zip_buffer.getvalue()) / (1024 * 1024)
+                                st.metric("ZIP Size", f"{failed_zip_size_mb:.2f} MB")
+
+                            st.info("💡 These are the original uploaded files that couldn't be processed. Use a different tool to add geo-tags to these images.")
+
+                        # Add file lists download section
+                        st.markdown("---")
+                        st.subheader("📋 File Lists for Tracking")
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            # Successfully processed files list
+                            success_list = "\n".join([f['name'] for f in processed_files])
+                            st.download_button(
+                                label="⬇️ Download Success List (TXT)",
+                                data=success_list,
+                                file_name=f"successfully_processed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                                mime="text/plain",
+                                help="List of filenames that were successfully processed"
+                            )
+                            st.caption(f"✓ {len(processed_files)} files")
+
+                        with col2:
+                            # Failed files list (if any)
+                            if failed_files:
+                                failed_list = "\n".join([f"{f['name']}: {f['error']}" for f in failed_files])
+                                st.download_button(
+                                    label="⬇️ Download Failed List (TXT)",
+                                    data=failed_list,
+                                    file_name=f"failed_list_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                                    mime="text/plain",
+                                    help="List of filenames that failed processing with error details"
+                                )
+                                st.caption(f"❌ {len(failed_files)} files")
+                            else:
+                                st.caption("✓ No failed files")
+
+                        st.info("💡 **Upload issue?** If you selected 1,056 files but only 899 uploaded, compare the success list against your original folder to find which files were dropped during upload.")
+
                     else:
                         st.error("❌ Failed to process images. Please try again.")
 
