@@ -124,7 +124,7 @@ def main():
     )
 
     st.title("📍 Bulk Image Geo-Tagging Tool")
-    st.markdown("Add geo-tags and metadata to multiple images at once")
+    st.markdown("Add geo-tags and metadata to images from a ZIP archive")
 
     # Show capabilities
     with st.expander("ℹ️ Upload Limits & Recommendations", expanded=False):
@@ -133,14 +133,15 @@ def main():
             st.markdown("""
             **Upload Limits:**
             - Max total upload: 2000 MB (2 GB)
-            - Supported formats: JPG, JPEG, PNG
-            - No limit on number of files
+            - Supported formats: ZIP files containing JPG, JPEG, PNG images
+            - Folder structure will be preserved in output
             """)
         with col2:
             st.markdown("""
             **Recommendations:**
+            - ZIP should contain images in YEAR > MONTH folder structure
+            - Example: 2024/01/image1.jpg, 2024/02/image2.jpg
             - Process 100-500 images per batch for optimal performance
-            - Typical 5MB photo = ~400 images per batch
             - Memory-optimized for bulk operations
             """)
 
@@ -177,23 +178,50 @@ def main():
     st.sidebar.info("Note: All images are converted to JPEG format to ensure EXIF metadata compatibility.")
 
     # Main content area
-    st.header("Upload Images")
-    uploaded_files = st.file_uploader(
-        "Choose image files",
-        type=["jpg", "jpeg", "png"],
-        accept_multiple_files=True,
-        help="Upload one or more images to add geo-tags and metadata"
+    st.header("Upload ZIP Archive")
+    uploaded_zip = st.file_uploader(
+        "Choose a ZIP file containing images",
+        type=["zip"],
+        accept_multiple_files=False,
+        help="Upload a ZIP file with images organized in YEAR > MONTH folder structure"
     )
 
-    if uploaded_files:
+    if uploaded_zip:
         # Calculate total size
-        total_size = sum([file.size for file in uploaded_files])
-        total_size_mb = total_size / (1024 * 1024)
+        zip_size_mb = uploaded_zip.size / (1024 * 1024)
 
-        st.success(f"✓ {len(uploaded_files)} image(s) uploaded ({total_size_mb:.2f} MB total)")
+        st.success(f"✓ ZIP file uploaded ({zip_size_mb:.2f} MB)")
 
-        # Warning if upload seems incomplete
-        st.info(f"💡 **Tip:** If you selected more files than shown above, some may have been dropped due to browser/upload limits. After processing, you can download a list of successfully processed files to compare against your original set.")
+        # Extract and analyze ZIP structure
+        try:
+            with zipfile.ZipFile(io.BytesIO(uploaded_zip.read()), 'r') as zip_ref:
+                file_list = [f for f in zip_ref.namelist() if not f.endswith('/') and f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                total_images = len(file_list)
+
+                # Analyze folder structure
+                folders = set()
+                for file_path in file_list:
+                    folder = os.path.dirname(file_path)
+                    if folder:
+                        folders.add(folder)
+
+                st.info(f"📁 Found {total_images} image(s) in {len(folders)} folder(s)")
+
+                # Show folder structure preview
+                if folders:
+                    with st.expander("Preview Folder Structure", expanded=False):
+                        sorted_folders = sorted(folders)
+                        preview_text = "\n".join([f"📁 {folder}" for folder in sorted_folders[:20]])
+                        if len(folders) > 20:
+                            preview_text += f"\n... and {len(folders) - 20} more folders"
+                        st.text(preview_text)
+
+            # Reset file pointer for later processing
+            uploaded_zip.seek(0)
+
+        except Exception as e:
+            st.error(f"❌ Error reading ZIP file: {str(e)}")
+            st.stop()
 
         # Show preview of metadata
         with st.expander("Preview Metadata", expanded=True):
@@ -248,86 +276,109 @@ def main():
                 success_count = 0
 
                 try:
-                    for idx, uploaded_file in enumerate(uploaded_files):
-                        status_text.text(f"Processing {idx + 1}/{len(uploaded_files)}: {uploaded_file.name}...")
+                    # Extract and process ZIP file
+                    uploaded_zip.seek(0)
+                    with zipfile.ZipFile(io.BytesIO(uploaded_zip.read()), 'r') as zip_ref:
+                        # Get all image files from ZIP
+                        image_files = [f for f in zip_ref.namelist() if not f.endswith('/') and f.lower().endswith(('.jpg', '.jpeg', '.png'))]
 
-                        image_bytes = None
-                        try:
-                            # Read image bytes
-                            image_bytes = uploaded_file.read()
+                        for idx, file_path in enumerate(image_files):
+                            status_text.text(f"Processing {idx + 1}/{len(image_files)}: {file_path}...")
 
-                            # Get original format
-                            original_format = uploaded_file.name.split('.')[-1].upper()
+                            image_bytes = None
+                            try:
+                                # Read image bytes from ZIP
+                                image_bytes = zip_ref.read(file_path)
 
-                            # Process image
-                            processed_bytes, error = add_geotag_to_image(
-                                image_bytes,
-                                metadata,
-                                original_format=original_format,
-                                jpeg_quality=jpeg_quality
-                            )
+                                # Get original format
+                                original_format = file_path.split('.')[-1].upper()
 
-                            if processed_bytes and error is None:
-                                # Save to temporary file immediately to free memory
-                                temp_file_path = os.path.join(temp_dir, f"geotagged_{uploaded_file.name}")
-                                with open(temp_file_path, "wb") as f:
-                                    f.write(processed_bytes)
+                                # Process image
+                                processed_bytes, error = add_geotag_to_image(
+                                    image_bytes,
+                                    metadata,
+                                    original_format=original_format,
+                                    jpeg_quality=jpeg_quality
+                                )
 
-                                processed_files.append({
-                                    "name": uploaded_file.name,
-                                    "path": temp_file_path
-                                })
-                                success_count += 1
-                            else:
-                                # Track failed images and save original file
-                                failed_file_path = os.path.join(temp_dir, f"failed_{uploaded_file.name}")
-                                with open(failed_file_path, "wb") as f:
-                                    f.write(image_bytes)
+                                if processed_bytes and error is None:
+                                    # Preserve folder structure in output
+                                    # Create directory structure in temp folder
+                                    output_file_path = os.path.join(temp_dir, file_path)
+                                    output_dir = os.path.dirname(output_file_path)
 
-                                failed_files.append({
-                                    "name": uploaded_file.name,
-                                    "error": error or "Unknown error",
-                                    "path": failed_file_path
-                                })
+                                    if output_dir:
+                                        os.makedirs(output_dir, exist_ok=True)
 
-                            # Clear memory
-                            if processed_bytes:
-                                del processed_bytes
-                            if image_bytes:
-                                del image_bytes
-                            gc.collect()
+                                    # Save to temporary file with original folder structure
+                                    with open(output_file_path, "wb") as f:
+                                        f.write(processed_bytes)
 
-                        except Exception as e:
-                            # Save original file even if exception occurred
-                            if image_bytes:
-                                failed_file_path = os.path.join(temp_dir, f"failed_{uploaded_file.name}")
-                                with open(failed_file_path, "wb") as f:
-                                    f.write(image_bytes)
+                                    processed_files.append({
+                                        "name": os.path.basename(file_path),
+                                        "path": output_file_path,
+                                        "relative_path": file_path
+                                    })
+                                    success_count += 1
+                                else:
+                                    # Track failed images and save original file
+                                    failed_file_path = os.path.join(temp_dir, "failed", file_path)
+                                    failed_dir = os.path.dirname(failed_file_path)
+                                    if failed_dir:
+                                        os.makedirs(failed_dir, exist_ok=True)
 
-                                failed_files.append({
-                                    "name": uploaded_file.name,
-                                    "error": str(e),
-                                    "path": failed_file_path
-                                })
-                            else:
-                                failed_files.append({
-                                    "name": uploaded_file.name,
-                                    "error": str(e),
-                                    "path": None
-                                })
+                                    with open(failed_file_path, "wb") as f:
+                                        f.write(image_bytes)
 
-                        # Update progress
-                        progress_bar.progress((idx + 1) / len(uploaded_files))
+                                    failed_files.append({
+                                        "name": file_path,
+                                        "error": error or "Unknown error",
+                                        "path": failed_file_path
+                                    })
+
+                                # Clear memory
+                                if processed_bytes:
+                                    del processed_bytes
+                                if image_bytes:
+                                    del image_bytes
+                                gc.collect()
+
+                            except Exception as e:
+                                # Save original file even if exception occurred
+                                if image_bytes:
+                                    failed_file_path = os.path.join(temp_dir, "failed", file_path)
+                                    failed_dir = os.path.dirname(failed_file_path)
+                                    if failed_dir:
+                                        os.makedirs(failed_dir, exist_ok=True)
+
+                                    with open(failed_file_path, "wb") as f:
+                                        f.write(image_bytes)
+
+                                    failed_files.append({
+                                        "name": file_path,
+                                        "error": str(e),
+                                        "path": failed_file_path
+                                    })
+                                else:
+                                    failed_files.append({
+                                        "name": file_path,
+                                        "error": str(e),
+                                        "path": None
+                                    })
+
+                            # Update progress
+                            progress_bar.progress((idx + 1) / len(image_files))
 
                     status_text.text("Processing complete!")
 
                     # Show summary with clear breakdown
                     st.markdown("### Processing Summary")
+                    total_processed = success_count + len(failed_files)
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.metric("Total Uploaded", len(uploaded_files))
+                        st.metric("Total Images", total_processed)
                     with col2:
-                        st.metric("Successfully Processed", success_count, delta=None if success_count == len(uploaded_files) else f"{success_count - len(uploaded_files)}")
+                        st.metric("Successfully Processed", success_count, delta=None if success_count == total_processed else f"{success_count - total_processed}")
                     with col3:
                         st.metric("Failed", len(failed_files), delta=None if len(failed_files) == 0 else f"-{len(failed_files)}")
 
@@ -345,44 +396,31 @@ def main():
                             )
 
                     if processed_files:
-                        st.success(f"✓ Successfully processed {success_count} out of {len(uploaded_files)} image(s)")
+                        st.success(f"✓ Successfully processed {success_count} out of {total_processed} image(s)")
 
                         # Create download section
                         st.header("Download Processed Images")
 
-                        if len(processed_files) == 1:
-                            # Single file download - read from temp file
-                            with open(processed_files[0]["path"], "rb") as f:
-                                file_data = f.read()
+                        # Create ZIP from temp files with preserved folder structure
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                            for img_info in processed_files:
+                                # Add file to ZIP with original folder structure (relative_path)
+                                zip_file.write(img_info["path"], img_info['relative_path'])
 
-                            st.download_button(
-                                label="⬇️ Download Image",
-                                data=file_data,
-                                file_name=processed_files[0]['name'],
-                                mime="image/jpeg",
-                                use_container_width=True
-                            )
-                        else:
-                            # Multiple files - create ZIP from temp files
-                            zip_buffer = io.BytesIO()
-                            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                                for img_info in processed_files:
-                                    # Add file to ZIP with original filename
-                                    zip_file.write(img_info["path"], img_info['name'])
+                        zip_buffer.seek(0)
 
-                            zip_buffer.seek(0)
+                        st.download_button(
+                            label=f"⬇️ Download Geotagged Images (ZIP)",
+                            data=zip_buffer.getvalue(),
+                            file_name=f"geotagged_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                            mime="application/zip",
+                            use_container_width=True
+                        )
 
-                            st.download_button(
-                                label=f"⬇️ Download All Images (ZIP)",
-                                data=zip_buffer.getvalue(),
-                                file_name=f"geotagged_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                                mime="application/zip",
-                                use_container_width=True
-                            )
-
-                            # Show size info
-                            zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
-                            st.info(f"📦 ZIP file size: {zip_size_mb:.2f} MB")
+                        # Show size info
+                        zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
+                        st.info(f"📦 ZIP file size: {zip_size_mb:.2f} MB | Folder structure preserved")
 
                         # Add failed images download section (if any)
                         if failed_files:
@@ -443,14 +481,14 @@ def main():
                         col1, col2 = st.columns(2)
 
                         with col1:
-                            # Successfully processed files list
-                            success_list = "\n".join([f['name'] for f in processed_files])
+                            # Successfully processed files list with folder structure
+                            success_list = "\n".join([f['relative_path'] for f in processed_files])
                             st.download_button(
                                 label="⬇️ Download Success List (TXT)",
                                 data=success_list,
                                 file_name=f"successfully_processed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                                 mime="text/plain",
-                                help="List of filenames that were successfully processed"
+                                help="List of file paths that were successfully processed"
                             )
                             st.caption(f"✓ {len(processed_files)} files")
 
@@ -463,13 +501,11 @@ def main():
                                     data=failed_list,
                                     file_name=f"failed_list_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                                     mime="text/plain",
-                                    help="List of filenames that failed processing with error details"
+                                    help="List of file paths that failed processing with error details"
                                 )
                                 st.caption(f"❌ {len(failed_files)} files")
                             else:
                                 st.caption("✓ No failed files")
-
-                        st.info("💡 **Upload issue?** If you selected 1,056 files but only 899 uploaded, compare the success list against your original folder to find which files were dropped during upload.")
 
                     else:
                         st.error("❌ Failed to process images. Please try again.")
@@ -483,14 +519,14 @@ def main():
                         pass
 
     else:
-        st.info("👆 Upload images using the file uploader above to get started")
+        st.info("👆 Upload a ZIP file containing images organized in YEAR > MONTH folder structure to get started")
 
     # Footer
     st.markdown("---")
     st.markdown(
         """
         <div style='text-align: center; color: #666;'>
-            <small>Built with Streamlit • Supports JPG, JPEG, and PNG formats</small>
+            <small>Built with Streamlit • Supports ZIP files containing JPG, JPEG, and PNG images • Preserves folder structure</small>
         </div>
         """,
         unsafe_allow_html=True
