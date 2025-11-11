@@ -7,6 +7,7 @@ from datetime import datetime
 import tempfile
 import os
 import gc
+import time
 
 
 def convert_to_degrees(value):
@@ -21,7 +22,37 @@ def convert_to_degrees(value):
     return ((degrees, 1), (minutes, 1), (seconds, 100))
 
 
-def add_geotag_to_image(image_bytes, metadata, original_format="JPEG", jpeg_quality=95):
+def extract_date_from_image(image_bytes):
+    """
+    Extract the original date from an image's EXIF data.
+
+    Args:
+        image_bytes: Image file bytes
+
+    Returns:
+        datetime object or None if no date found
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        exif_dict = piexif.load(img.info.get("exif", b""))
+
+        # Try to get DateTimeOriginal first (when photo was taken)
+        if "Exif" in exif_dict and piexif.ExifIFD.DateTimeOriginal in exif_dict["Exif"]:
+            date_str = exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal].decode("utf-8")
+            return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+
+        # Fallback to DateTime (when file was modified)
+        if "0th" in exif_dict and piexif.ImageIFD.DateTime in exif_dict["0th"]:
+            date_str = exif_dict["0th"][piexif.ImageIFD.DateTime].decode("utf-8")
+            return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+
+    except:
+        pass
+
+    return None
+
+
+def add_geotag_to_image(image_bytes, metadata, original_format="JPEG", jpeg_quality=95, modification_date=None):
     """
     Add geo-tagging and metadata to an image's EXIF data.
 
@@ -30,6 +61,7 @@ def add_geotag_to_image(image_bytes, metadata, original_format="JPEG", jpeg_qual
         metadata: Dictionary containing title, description, keywords, address, latitude, longitude
         original_format: Original image format (JPEG, PNG, etc.)
         jpeg_quality: JPEG quality (1-100) when converting to JPEG
+        modification_date: datetime object for the original modification date
 
     Returns:
         Tuple of (modified image bytes, error message) or (None, error message) on failure
@@ -91,6 +123,16 @@ def add_geotag_to_image(image_bytes, metadata, original_format="JPEG", jpeg_qual
             address_bytes = metadata["address"].encode("utf-8")
             exif_dict["GPS"][piexif.GPSIFD.GPSProcessingMethod] = b"ASCII\x00\x00\x00" + address_bytes
 
+        # Add date/time metadata if provided
+        if modification_date:
+            date_str = modification_date.strftime("%Y:%m:%d %H:%M:%S").encode("utf-8")
+            # Set DateTime (file modification time)
+            exif_dict["0th"][piexif.ImageIFD.DateTime] = date_str
+            # Set DateTimeOriginal (when photo was taken)
+            exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = date_str
+            # Set DateTimeDigitized (when photo was digitized)
+            exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = date_str
+
         # Convert EXIF dict to bytes
         exif_bytes = piexif.dump(exif_dict)
 
@@ -143,6 +185,14 @@ def main():
             - Typical 5MB photo = ~400 images per batch
             - Memory-optimized for bulk operations
             """)
+
+        st.markdown("---")
+        st.info("""
+        📁 **WordPress-Compatible Output:** Images are automatically organized in YEAR/MONTH/ folder structure
+        (e.g., 2025/01/) based on their original date metadata. This matches WordPress's /wp-content/uploads/
+        structure, making it easy to upload directly to your WordPress site. Original modification dates are
+        preserved in both EXIF metadata and file system timestamps.
+        """)
 
     # Sidebar for metadata input
     st.sidebar.header("Metadata Settings")
@@ -256,6 +306,17 @@ def main():
                             # Read image bytes
                             image_bytes = uploaded_file.read()
 
+                            # Extract modification date from EXIF data
+                            modification_date = extract_date_from_image(image_bytes)
+                            if not modification_date:
+                                # Use current time as fallback
+                                modification_date = datetime.now()
+
+                            # Create YEAR/MONTH folder structure based on modification date
+                            year_month_path = modification_date.strftime("%Y/%m")
+                            output_dir = os.path.join(temp_dir, year_month_path)
+                            os.makedirs(output_dir, exist_ok=True)
+
                             # Get original format
                             original_format = uploaded_file.name.split('.')[-1].upper()
 
@@ -264,18 +325,24 @@ def main():
                                 image_bytes,
                                 metadata,
                                 original_format=original_format,
-                                jpeg_quality=jpeg_quality
+                                jpeg_quality=jpeg_quality,
+                                modification_date=modification_date
                             )
 
                             if processed_bytes and error is None:
-                                # Save to temporary file immediately to free memory
-                                temp_file_path = os.path.join(temp_dir, f"geotagged_{uploaded_file.name}")
+                                # Save to temporary file with YEAR/MONTH structure
+                                temp_file_path = os.path.join(output_dir, uploaded_file.name)
                                 with open(temp_file_path, "wb") as f:
                                     f.write(processed_bytes)
 
+                                # Set file system modification time to match original
+                                mod_timestamp = modification_date.timestamp()
+                                os.utime(temp_file_path, (mod_timestamp, mod_timestamp))
+
                                 processed_files.append({
                                     "name": uploaded_file.name,
-                                    "path": temp_file_path
+                                    "path": temp_file_path,
+                                    "archive_path": os.path.join(year_month_path, uploaded_file.name)
                                 })
                                 success_count += 1
                             else:
@@ -363,12 +430,13 @@ def main():
                                 use_container_width=True
                             )
                         else:
-                            # Multiple files - create ZIP from temp files
+                            # Multiple files - create ZIP from temp files with YEAR/MONTH structure
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                                 for img_info in processed_files:
-                                    # Add file to ZIP with original filename
-                                    zip_file.write(img_info["path"], img_info['name'])
+                                    # Add file to ZIP with YEAR/MONTH/ folder structure
+                                    archive_path = img_info.get("archive_path", img_info['name'])
+                                    zip_file.write(img_info["path"], archive_path)
 
                             zip_buffer.seek(0)
 
@@ -380,9 +448,9 @@ def main():
                                 use_container_width=True
                             )
 
-                            # Show size info
+                            # Show size info and folder structure notice
                             zip_size_mb = len(zip_buffer.getvalue()) / (1024 * 1024)
-                            st.info(f"📦 ZIP file size: {zip_size_mb:.2f} MB")
+                            st.info(f"📦 ZIP file size: {zip_size_mb:.2f} MB\n\n📁 Images are organized in YEAR/MONTH/ folders inside the ZIP (WordPress-compatible)")
 
                         # Add failed images download section (if any)
                         if failed_files:

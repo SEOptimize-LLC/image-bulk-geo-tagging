@@ -11,12 +11,14 @@ A powerful and user-friendly Streamlit application that allows you to add geo-ta
   - Keywords & Tags
   - Physical Address
   - GPS Coordinates (Latitude & Longitude)
+  - **Date/Time Preservation**: Automatically extracts and preserves original modification dates from image EXIF data
 - **EXIF Data Integration**: All metadata is embedded directly into the image EXIF data
+- **WordPress-Compatible Output**: Images are automatically organized in YEAR/MONTH/ folder structure (e.g., 2025/01/) matching WordPress's /wp-content/uploads/ structure
 - **Memory-Optimized**: Uses temporary files and garbage collection for efficient processing
 - **User-Friendly Interface**: Clean, intuitive Streamlit interface
 - **Flexible Download Options**:
   - Single image download for one file
-  - ZIP archive for multiple images
+  - ZIP archive for multiple images with preserved folder structure
 - **Format Support**: Works with JPG, JPEG, and PNG image formats
 - **Cloud Ready**: Optimized for deployment on Streamlit Cloud
 - **Large Upload Support**: Up to 2GB total upload size
@@ -145,6 +147,32 @@ Based on typical image sizes:
 
 **Note**: While you can upload up to 2GB at once, processing 100-500 images per batch is recommended for the best user experience on Streamlit Cloud.
 
+## WordPress Integration
+
+### Automatic Folder Organization
+
+The application automatically organizes processed images in a WordPress-compatible folder structure:
+
+- Images are organized by their original modification date into **YEAR/MONTH/** folders (e.g., `2025/01/`)
+- This matches WordPress's `/wp-content/uploads/` structure exactly
+- Simply extract the ZIP file and upload the folder structure directly to your WordPress media library
+- No manual reorganization needed!
+
+### Date Preservation
+
+The app intelligently handles image dates:
+
+1. **Extracts original date** from image EXIF metadata:
+   - First tries `DateTimeOriginal` (when photo was taken)
+   - Falls back to `DateTime` (when file was last modified)
+   - Uses current date/time if no EXIF date is found
+
+2. **Preserves date in processed images**:
+   - Stores in EXIF `DateTime`, `DateTimeOriginal`, and `DateTimeDigitized` fields
+   - Sets file system modification timestamp to match original
+
+3. **Maintains chronological organization** for easy WordPress uploads
+
 ## Technical Details
 
 ### EXIF Data Mapping
@@ -154,6 +182,10 @@ The application maps your input to the following EXIF fields:
 - **Title** → `ImageDescription` (0th IFD)
 - **Description** → `UserComment` (Exif IFD)
 - **Keywords** → `XPKeywords` (0th IFD, UTF-16LE encoded)
+- **Date/Time** → Multiple fields for compatibility:
+  - `DateTime` (0th IFD) - File modification time
+  - `DateTimeOriginal` (Exif IFD) - When photo was taken
+  - `DateTimeDigitized` (Exif IFD) - When photo was digitized
 - **GPS Coordinates** → GPS IFD fields:
   - `GPSLatitude` and `GPSLatitudeRef`
   - `GPSLongitude` and `GPSLongitudeRef`
